@@ -2,6 +2,7 @@ from django.db import models
 from django.db.models import F, Q
 from django.contrib.auth.models import AbstractUser
 from django.utils.text import Truncator
+from django.core.exceptions import ValidationError
 
 class User(AbstractUser):
     """Extende o modelo base do Django
@@ -12,12 +13,20 @@ class User(AbstractUser):
     def __str__(self):
         return self.username
 
+class Categoria(models.Model):
+    titulo = models.CharField(max_length=120)
+
+    def __str__(self):
+        return self.titulo
+
 class Enquete(models.Model):
     """informação necesaria e basica de um enquete"""
 
     titulo = models.CharField(max_length=120)
+    categoria = models.ForeignKey(Categoria, blank=True, null=True, related_name="enquetes", on_delete=models.SET_NULL)
     criador = models.ForeignKey(User, on_delete=models.CASCADE, related_name="enquetes_criados")
     usuarios = models.ManyToManyField(User, through="EnqueteEmUso") # through indica a Django que usaremos uma tabela intermediaria pra adicionar iformações 
+    aberto = models.BooleanField(default=True)
 
     def __str__(self):
         return self.titulo
@@ -40,7 +49,31 @@ class Opcoes(models.Model):
     def __str__(self) -> str: 
         """o Truncator simplesmente limita o numero de palavras"""
         return Truncator(self.descricao).words(5)
+
+
+class Voto(models.Model):
+    """representa um voto"""
+
+    usuario = models.ForeignKey(User, blank=True, related_name="votos", on_delete=models.CASCADE)
+    enquete = models.ForeignKey(Enquete, related_name="votos", on_delete=models.DO_NOTHING)
+    pergunta = models.ForeignKey(Pergunta, related_name="votos", on_delete=models.DO_NOTHING)
+    resposta = models.ForeignKey(Opcoes, blank=True, null=True, related_name="votos", on_delete=models.SET_NULL)
+
+    def __str__(self):
+        return f"escolha #{self.resposta.id} em #{self.enquete.id}/{self.pergunta.id}"
     
+    def save(self, *args, **kwargs):
+        """conferindo qua a resposta corresponda á pergunta
+        e a pergunta correspona ao enquete"""
+
+        if self.resposta not in self.pergunta.opcoes.all():
+            raise ValidationError('resposta invalida, por favor escolha uma opcao que corresponda á pergunta')
+        
+        if self.pergunta not in self.enquete.perguntas.all():
+            raise ValidationError('pergunta invalida, por favor escolha uma opcao que corresponda ao enquete')
+
+        super(Voto, self).save(*args, **kwargs) # chamo ao metodo save 'original'
+
     
 # ====          MODELOS INTERMEDIARIOS          ===
 
@@ -55,30 +88,3 @@ class EnqueteEmUso(models.Model):
 
     def __str__(self):
         return f'{self.enquete} #{self.enquete.id}'
-
-# TODO de todos esse modelo é o que ainda não estou certo de como pode ficar
-class PerguntaEmUso(models.Model):
-    """A ideia de esto é fazer seguimento das resposatas dadas pelo usuario
-    """
-    pergunta = models.ForeignKey(Pergunta, on_delete=models.CASCADE, related_name="em_uso")
-    
-    # tenho duvidas se ussar esse campo, pois o modelo pode servir sem ele 
-    # enqute_em_uso = models.ForeignKey(EnqueteEmUso, on_delete=models.CASCADE, related_name="perguntas_em_uso")
-    
-    eleicao = models.ForeignKey(Opcoes, null=True, on_delete=models.SET_NULL, related_name="escolhda_em_pergunta")
-
-    def save(self, *args, **kwargs):
-        """conferindo qua a eleicao forme parte das opcoes da pergunta correspondiente"""
-
-        if self.eleicao not in self.pergunta.opcoes.all():
-            raise ValueError('Eleicao invalida, por favor eliga uma opcao que corresponda á pergunta')
-
-        super(PerguntaEmUso, self).save(*args, **kwargs) # chamo ao metodo save 'original'
-        
-    class Meta:
-        pass
-
-        # TODO aggregar uma constrain para impedir que o usuario responda duas veces a misma pergunta 
-    
-    def __str__(self):
-        return f'{self.pergunta} #{self.pergunta.id}'
